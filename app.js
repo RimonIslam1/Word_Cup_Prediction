@@ -55,6 +55,60 @@ let qfPairs = [];
 let sfPairs = [];
 let finalPair = [];
 
+// --- OFFICIAL FIFA WORLD CUP 2026 KNOCKOUT BRACKET STRUCTURE ---
+
+/**
+ * Maps the Round of 32 pairings matching the official FIFA 2026 schedule path structure.
+ */
+const ROUND_OF_32_MAPPINGS = [
+  { id: "M73", home: "2A", away: "2B" },
+  { id: "M74", home: "1E", away: "3_0" }, // Feeds first selected wildcard
+  { id: "M75", home: "1F", away: "2C" },
+  { id: "M76", home: "1C", away: "2F" },
+  { id: "M77", home: "1I", away: "3_1" }, // Feeds second selected wildcard
+  { id: "M78", home: "2E", away: "2I" },
+  { id: "M79", home: "1A", away: "3_2" }, // Feeds third selected wildcard
+  { id: "M80", home: "1L", away: "3_3" }, // Feeds fourth selected wildcard
+  { id: "M81", home: "1D", away: "3_4" }, // Feeds fifth selected wildcard
+  { id: "M82", home: "1G", away: "3_5" }, // Feeds sixth selected wildcard
+  { id: "M83", home: "2K", away: "2L" },
+  { id: "M84", home: "1H", away: "2J" },
+  { id: "M85", home: "1B", away: "3_6" }, // Feeds seventh selected wildcard
+  { id: "M86", home: "1J", away: "2H" },
+  { id: "M87", home: "1K", away: "3_7" }, // Feeds eighth selected wildcard
+  { id: "M88", home: "2D", away: "2G" }
+];
+
+/**
+ * Progression matrix where downstream matches are mapped to dependencies.
+ * Index numbers correspond to match offsets inside the previous round's array structure.
+ */
+const SUBSEQUENT_KNOCKOUT_MAPPINGS = {
+  r16: [
+    { home: { round: "r32", idx: 1 }, away: { round: "r32", idx: 4 } },   // M89: W74 vs W77
+    { home: { round: "r32", idx: 0 }, away: { round: "r32", idx: 2 } },   // M90: W73 vs W75
+    { home: { round: "r32", idx: 3 }, away: { round: "r32", idx: 5 } },   // M91: W76 vs W78
+    { home: { round: "r32", idx: 6 }, away: { round: "r32", idx: 7 } },   // M92: W79 vs W80
+    { home: { round: "r32", idx: 10 }, away: { round: "r32", idx: 11 } }, // M93: W83 vs W84
+    { home: { round: "r32", idx: 8 }, away: { round: "r32", idx: 9 } },   // M94: W81 vs W82
+    { home: { round: "r32", idx: 13 }, away: { round: "r32", idx: 15 } }, // M95: W86 vs W88
+    { home: { round: "r32", idx: 12 }, away: { round: "r32", idx: 14 } }  // M96: W85 vs W87
+  ],
+  qf: [
+    { home: { round: "r16", idx: 0 }, away: { round: "r16", idx: 1 } },   // M97: W89 vs W90
+    { home: { round: "r16", idx: 4 }, away: { round: "r16", idx: 5 } },   // M98: W93 vs W94
+    { home: { round: "r16", idx: 2 }, away: { round: "r16", idx: 3 } },   // M99: W91 vs W92
+    { home: { round: "r16", idx: 6 }, away: { round: "r16", idx: 7 } }    // M100: W95 vs W96
+  ],
+  sf: [
+    { home: { round: "qf", idx: 0 }, away: { round: "qf", idx: 1 } },     // M101: W97 vs W98
+    { home: { round: "qf", idx: 2 }, away: { round: "qf", idx: 3 } }      // M102: W99 vs W100
+  ],
+  final: [
+    { home: { round: "sf", idx: 0 }, away: { round: "sf", idx: 1 } }      // M104: W101 vs W102
+  ]
+};
+
 // --- Flag CDN Asset Injection Resolver ---
 function getFlagUrl(team) {
   const code = ISO[team];
@@ -73,33 +127,53 @@ function createFlagImg(team) {
 
 // --- Bracket Assembly Engine ---
 function buildR32() {
-  const firsts = Object.values(groupRankings).map(t => t[0]);
-  const seconds = Object.values(groupRankings).map(t => t[1]);
-  const seeded = [...firsts, ...seconds, ...thirdPicks];
-  
-  const pairs = [];
-  for (let i = 0; i < 16; i++) {
-    pairs.push({ a: seeded[i], b: seeded[31 - i] });
-  }
-  return pairs;
+  return ROUND_OF_32_MAPPINGS.map(mapping => {
+    let homeTeam = null;
+    let awayTeam = null;
+
+    // Resolve Home Side placement Code (e.g. "1E", "2A")
+    if (mapping.home) {
+      const rank = parseInt(mapping.home[0], 10) - 1;
+      const grp = mapping.home[1];
+      if (groupRankings[grp]) homeTeam = groupRankings[grp][rank];
+    }
+
+    // Resolve Away Side placement Code or Wildcard placeholder
+    if (mapping.away.startsWith("3_")) {
+      const wildcardIndex = parseInt(mapping.away.split("_")[1], 10);
+      awayTeam = thirdPicks[wildcardIndex] || null;
+    } else {
+      const rank = parseInt(mapping.away[0], 10) - 1;
+      const grp = mapping.away[1];
+      if (groupRankings[grp]) awayTeam = groupRankings[grp][rank];
+    }
+
+    return { a: homeTeam, b: awayTeam };
+  });
 }
 
-function buildNextRound(prevPairs, winners) {
-  const ws = prevPairs.map((_, i) => winners[i] || null);
-  if (ws.some(w => !w)) return [];
-  const pairs = [];
-  for (let i = 0; i < ws.length; i += 2) {
-    pairs.push({ a: ws[i], b: ws[i + 1] });
-  }
-  return pairs;
+function buildNextRound(prevPairs, winners, targetRoundKey) {
+  const blueprint = SUBSEQUENT_KNOCKOUT_MAPPINGS[targetRoundKey];
+  if (!blueprint) return [];
+
+  return blueprint.map(match => {
+    const homeWinnerSourceIdx = match.home.idx;
+    const awayWinnerSourceIdx = match.away.idx;
+
+    // Fetch values based on state arrays mapping
+    const homeTeam = knockoutWinners[match.home.round][homeWinnerSourceIdx] || null;
+    const awayTeam = knockoutWinners[match.away.round][awayWinnerSourceIdx] || null;
+
+    return { a: homeTeam, b: awayTeam };
+  });
 }
 
 function updateTournamentData() {
   r32Pairs = buildR32();
-  r16Pairs = buildNextRound(r32Pairs, Object.values(knockoutWinners.r32));
-  qfPairs = buildNextRound(r16Pairs, Object.values(knockoutWinners.r16));
-  sfPairs = buildNextRound(qfPairs, Object.values(knockoutWinners.qf));
-  finalPair = buildNextRound(sfPairs, Object.values(knockoutWinners.sf));
+  r16Pairs = buildNextRound(r32Pairs, knockoutWinners.r32, "r16");
+  qfPairs = buildNextRound(r16Pairs, knockoutWinners.r16, "qf");
+  sfPairs = buildNextRound(qfPairs, knockoutWinners.qf, "sf");
+  finalPair = buildNextRound(sfPairs, knockoutWinners.sf, "final");
 }
 
 // --- Controller Actions ---
@@ -365,7 +439,13 @@ function renderKnockoutRound(container, roundKey, label, subtitle, pairs, nextSt
     
     const cardHeader = document.createElement("div");
     cardHeader.className = "match-header";
-    cardHeader.textContent = `Matchup #${i + 1}`;
+    
+    // Explicitly title matches based on true FIFA numbering schemes
+    let displayMatchLabel = `Matchup #${i + 1}`;
+    if (roundKey === "r32") {
+      displayMatchLabel = `Match ${ROUND_OF_32_MAPPINGS[i].id}`;
+    }
+    cardHeader.textContent = displayMatchLabel;
     card.appendChild(cardHeader);
     
     const cardBody = document.createElement("div");
@@ -419,17 +499,27 @@ function renderKnockoutRound(container, roundKey, label, subtitle, pairs, nextSt
 
 function clearDownstreamRounds(purgedRoundKey, index) {
   if (purgedRoundKey === "r32") {
-    delete knockoutWinners.r16[Math.floor(index / 2)];
-    delete knockoutWinners.qf[Math.floor(index / 4)];
-    delete knockoutWinners.sf[Math.floor(index / 8)];
-    knockoutWinners.final = null;
+    // Find dependencies pointing back to this index position
+    SUBSEQUENT_KNOCKOUT_MAPPINGS.r16.forEach((m, idx) => {
+      if ((m.home.round === "r32" && m.home.idx === index) || (m.away.round === "r32" && m.away.idx === index)) {
+        delete knockoutWinners.r16[idx];
+        clearDownstreamRounds("r16", idx);
+      }
+    });
   } else if (purgedRoundKey === "r16") {
-    delete knockoutWinners.qf[Math.floor(index / 2)];
-    delete knockoutWinners.sf[Math.floor(index / 4)];
-    knockoutWinners.final = null;
+    SUBSEQUENT_KNOCKOUT_MAPPINGS.qf.forEach((m, idx) => {
+      if ((m.home.round === "r16" && m.home.idx === index) || (m.away.round === "r16" && m.away.idx === index)) {
+        delete knockoutWinners.qf[idx];
+        clearDownstreamRounds("qf", idx);
+      }
+    });
   } else if (purgedRoundKey === "qf") {
-    delete knockoutWinners.sf[Math.floor(index / 2)];
-    knockoutWinners.final = null;
+    SUBSEQUENT_KNOCKOUT_MAPPINGS.sf.forEach((m, idx) => {
+      if ((m.home.round === "qf" && m.home.idx === index) || (m.away.round === "qf" && m.away.idx === index)) {
+        delete knockoutWinners.sf[idx];
+        clearDownstreamRounds("sf", idx);
+      }
+    });
   } else if (purgedRoundKey === "sf") {
     knockoutWinners.final = null;
   }
